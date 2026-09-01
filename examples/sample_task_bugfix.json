@@ -1,0 +1,93 @@
+{
+  "schema_version": "1.0.0",
+  "context": {
+    "session_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "conversation_id": "conv-chatgpt-web-9988",
+    "message_id": "msg-assistant-112233",
+    "source": "chatgpt_web_action",
+    "user_intent": "Fix timing vulnerability in API authentication bearer token verification",
+    "decision_rationale": "Direct string comparison in verify_token exposes a timing side-channel attack vector. We must migrate to hmac.compare_digest for constant-time evaluation.",
+    "timestamp": "2026-09-01T04:40:00Z",
+    "discussion_summary": "Identified potential timing leak when comparing authorization tokens. Decided to patch security.py with constant-time HMAC comparison.",
+    "branch_or_context": "fix/auth-timing-leak"
+  },
+  "task": {
+    "task_id": "task-bugfix-auth-timing-001",
+    "title": "Fix timing attack in Bearer token authentication",
+    "description": "Refactor token comparison logic in security module to strictly utilize hmac.compare_digest. Ensure handling of None and empty inputs without throwing unhandled exceptions.",
+    "category": "bugfix",
+    "priority": "critical",
+    "complexity": "small",
+    "tags": ["security", "auth", "hmac", "timing-attack"],
+    "dependencies": [],
+    "estimated_duration_seconds": 60
+  },
+  "constraints": {
+    "environment": {
+      "os": "any",
+      "runtime": "python>=3.10",
+      "cwd": "."
+    },
+    "security_policy": {
+      "execution_mode": "sandboxed",
+      "permitted_commands": [
+        "^python3?\\b",
+        "^pytest\\b",
+        "^git\\b"
+      ],
+      "forbidden_commands": [
+        "\\brm\\s+-rf\\s+[/~]",
+        "\\bmkfs\\b"
+      ],
+      "allowed_file_paths": [
+        "*"
+      ],
+      "forbidden_file_paths": [
+        ".git/*",
+        ".env*"
+      ],
+      "network_access": "local_only"
+    },
+    "limits": {
+      "max_execution_timeout_seconds": 180,
+      "max_iterations": 15,
+      "max_file_modifications": 5,
+      "max_token_budget": 10000
+    },
+    "deterministic_parameters": {
+      "temperature": 0.0,
+      "seed": 42,
+      "strict_mode": true
+    }
+  },
+  "file_operations": [
+    {
+      "path": "bridge/security.py",
+      "operation": "inspect",
+      "description": "Verify presence of verify_token and hmac.compare_digest implementation",
+      "is_critical": true
+    }
+  ],
+  "verification": {
+    "automated_checks": [
+      {
+        "id": "check-hmac-digest",
+        "name": "Verify constant-time HMAC comparison execution",
+        "type": "command",
+        "command": "python3 -c \"import hmac; from bridge.security import verify_token; assert verify_token('secret-123', 'secret-123') is True; assert verify_token('wrong', 'secret-123') is False; assert verify_token(None, 'secret-123') is False\"",
+        "expected_exit_code": 0,
+        "timeout_seconds": 30,
+        "is_blocking": true
+      }
+    ],
+    "manual_verification_steps": [
+      "Submit valid token request to /api/tasks and check 201 Created response",
+      "Submit invalid token request to /api/tasks and check 401 Unauthorized response"
+    ],
+    "acceptance_statement": "Bearer token comparison executes in constant time using hmac.compare_digest and passes all unit assertions."
+  },
+  "execution_options": {
+    "auto_rollback_on_failure": true,
+    "notify_channel": "websocket"
+  }
+}

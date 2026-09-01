@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.0.0",
+  "context": {
+    "session_id": "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e",
+    "conversation_id": "conv-chatgpt-feature-8877",
+    "message_id": "msg-assistant-445566",
+    "source": "browser_extension",
+    "user_intent": "Implement health check and metrics probe endpoint for Bridge Daemon",
+    "decision_rationale": "To support container liveness probes and uptime monitoring, daemon requires a lightweight /health endpoint returning uptime and active task statistics.",
+    "timestamp": "2026-09-01T04:41:00Z",
+    "discussion_summary": "Agreed on adding a zero-auth /health route returning JSON status and uptime metrics.",
+    "branch_or_context": "feat/daemon-healthcheck"
+  },
+  "task": {
+    "task_id": "task-feature-health-probe-002",
+    "title": "Add health check and metrics status endpoint",
+    "description": "Implement GET /health and GET /api/health routes on Bridge HTTPServer returning 200 OK with server uptime, daemon version, and active worker pool queue depth.",
+    "category": "feature",
+    "priority": "high",
+    "complexity": "small",
+    "tags": ["feature", "api", "monitoring", "healthcheck"],
+    "dependencies": [],
+    "estimated_duration_seconds": 90
+  },
+  "constraints": {
+    "environment": {
+      "os": "any",
+      "runtime": "python>=3.10",
+      "cwd": "."
+    },
+    "security_policy": {
+      "execution_mode": "sandboxed",
+      "permitted_commands": [
+        "^python3?\\b",
+        "^pytest\\b",
+        "^curl\\b"
+      ],
+      "forbidden_commands": [
+        "\\brm\\s+-rf\\s+[/~]"
+      ],
+      "allowed_file_paths": [
+        "*"
+      ],
+      "forbidden_file_paths": [
+        ".git/*",
+        ".env*"
+      ],
+      "network_access": "local_only"
+    },
+    "limits": {
+      "max_execution_timeout_seconds": 300,
+      "max_iterations": 20,
+      "max_file_modifications": 5,
+      "max_token_budget": 12000
+    },
+    "deterministic_parameters": {
+      "temperature": 0.0,
+      "seed": 100,
+      "strict_mode": true
+    }
+  },
+  "file_operations": [
+    {
+      "path": "bridge/daemon.py",
+      "operation": "inspect",
+      "description": "Check that /health endpoint is registered and functional",
+      "is_critical": true
+    }
+  ],
+  "verification": {
+    "automated_checks": [
+      {
+        "id": "check-daemon-import",
+        "name": "Verify bridge module import and daemon class definition",
+        "type": "command",
+        "command": "python3 -c \"from bridge.daemon import BridgeDaemon; assert BridgeDaemon is not None\"",
+        "expected_exit_code": 0,
+        "timeout_seconds": 30,
+        "is_blocking": true
+      }
+    ],
+    "manual_verification_steps": [
+      "Launch daemon on local port and run curl http://127.0.0.1:8765/health",
+      "Verify response contains status: healthy and valid uptime_seconds"
+    ],
+    "acceptance_statement": "The /health endpoint returns HTTP 200 OK with valid JSON status, version, and server uptime without requiring authentication."
+  },
+  "execution_options": {
+    "auto_rollback_on_failure": true,
+    "notify_channel": "websocket"
+  }
+}
