@@ -1,145 +1,119 @@
 // ==UserScript==
-// @name         ChatGPT to Local Agent Bridge
+// @name         ChatGPT to Qwen (explicit assignments only)
 // @namespace    https://local.bridge/chatgpt
-// @version      1.0.0
-// @description  Handoff decisions and implementation tasks directly from ChatGPT Web to local agents (PI)
-// @author       ChatGPT Local Agent Bridge Team
+// @version      1.1.0
+// @description  Send completed [QWEN_TASK] assistant messages to the local bridge; ignore all other chat.
 // @match        https://chatgpt.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
 // @connect      127.0.0.1
-// @connect      localhost
 // @run-at       document-idle
 // ==/UserScript==
 
-(function() {
+(() => {
     'use strict';
 
-    const DEFAULT_DAEMON_URL = 'http://127.0.0.1:8765';
-    const CONFIG = {
-        get url() { return GM_getValue('bridge_daemon_url', DEFAULT_DAEMON_URL); },
-        set url(val) { GM_setValue('bridge_daemon_url', val); },
-        get token() { return GM_getValue('bridge_auth_token', ''); },
-        set token(val) { GM_setValue('bridge_auth_token', val); }
+    const DAEMON_URL = 'http://127.0.0.1:8765';
+    const inFlight = new Set();
+    const failedThisSession = new Set();
+    const recent = new Set(GM_getValue('qwen_dispatched_ids', []));
+    const pending = new WeakSet();
+
+    const config = {
+        get url() { return GM_getValue('bridge_daemon_url', DAEMON_URL); },
+        get token() { return GM_getValue('bridge_auth_token', ''); }
     };
 
-    // Register Tampermonkey menu commands
-    if (typeof GM_registerMenuCommand !== 'undefined') {
-        GM_registerMenuCommand('⚙️ Configure Local Bridge Settings', showConfigModal);
+    function configure() {
+        const url = prompt('Local bridge URL', config.url);
+        if (url === null) return;
+        const token = prompt('Bridge bearer token (stored by userscript manager)', config.token);
+        if (token === null) return;
+        // Only permit loopback; ChatGPT task contents should not be sent to arbitrary hosts.
+        if (!/^http:\/\/(127\.0\.0\.1|localhost):\d+\/?$/.test(url)) {
+            alert('The bridge URL must be a loopback HTTP address with an explicit port.');
+            return;
+        }
+        GM_setValue('bridge_daemon_url', url.replace(/\/$/, ''));
+        GM_setValue('bridge_auth_token', token.trim());
+        alert('Bridge settings saved.');
     }
+    GM_registerMenuCommand('Configure Qwen bridge', configure);
 
-    function showConfigModal() {
-        let modal = document.getElementById('bridge-config-modal');
-        if (modal) modal.remove();
+    // Markers must encompass the ENTIRE assistant message, not appear in a quote,
+    // explanation, code example or another part of an ordinary conversation.
+    function parseMarkedTask(text) {
+        const match = text.trim().match(/^\[QWEN_TASK\]\s*\n([\s\S]*?)\n\s*\[\/QWEN_TASK\]$/);
+        if (!match) return null;
 
-        modal = document.createElement('div');
-        modal.id = 'bridge-config-modal';
-        modal.style.cssText = `
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0,0,0,0.6); z-index: 999999; display: flex;
-            align-items: center; justify-content: center; font-family: sans-serif;
-        `;
-
-        modal.innerHTML = `
-            <div style="background: #1e1e2e; color: #cdd6f4; padding: 24px; border-radius: 12px; width: 420px; box-shadow: 0 8px 32px rgba(0,0,0,0.5);">
-                <h3 style="margin-top: 0; color: #a6e3a1; font-size: 18px;">⚡ Local Agent Bridge Configuration</h3>
-                <div style="margin-bottom: 14px;">
-                    <label style="display: block; font-size: 12px; margin-bottom: 4px; color: #bac2de;">Bridge Daemon URL:</label>
-                    <input id="cfg-bridge-url" type="text" value="${CONFIG.url}" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #45475a; background: #313244; color: #fff; box-sizing: border-box;" />
-                </div>
-                <div style="margin-bottom: 18px;">
-                    <label style="display: block; font-size: 12px; margin-bottom: 4px; color: #bac2de;">Bearer Auth Token:</label>
-                    <input id="cfg-bridge-token" type="password" value="${CONFIG.token}" placeholder="Paste token here" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #45475a; background: #313244; color: #fff; box-sizing: border-box;" />
-                </div>
-                <div style="display: flex; justify-content: flex-end; gap: 8px;">
-                    <button id="cfg-bridge-cancel" style="padding: 8px 16px; border-radius: 6px; border: none; background: #45475a; color: #cdd6f4; cursor: pointer;">Cancel</button>
-                    <button id="cfg-bridge-save" style="padding: 8px 16px; border-radius: 6px; border: none; background: #a6e3a1; color: #11111b; font-weight: bold; cursor: pointer;">Save Settings</button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(modal);
-
-        document.getElementById('cfg-bridge-cancel').onclick = () => modal.remove();
-        document.getElementById('cfg-bridge-save').onclick = () => {
-            CONFIG.url = document.getElementById('cfg-bridge-url').value.trim();
-            CONFIG.token = document.getElementById('cfg-bridge-token').value.trim();
-            showToast('✅ Bridge settings saved!', 'success');
-            modal.remove();
-        };
-    }
-
-    function showToast(msg, type = 'info') {
-        const toast = document.createElement('div');
-        const bg = type === 'success' ? '#a6e3a1' : (type === 'error' ? '#f38ba8' : '#89b4fa');
-        const fg = '#11111b';
-        toast.style.cssText = `
-            position: fixed; bottom: 24px; right: 24px; padding: 12px 20px;
-            background: ${bg}; color: ${fg}; font-weight: bold; font-size: 13px;
-            border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.3); z-index: 999999;
-            transition: opacity 0.3s; font-family: sans-serif;
-        `;
-        toast.innerText = msg;
-        document.body.appendChild(toast);
-        setTimeout(() => {
-            toast.style.opacity = '0';
-            setTimeout(() => toast.remove(), 300);
-        }, 3500);
-    }
-
-    function extractTaskPayload(messageElement) {
-        const codeBlocks = messageElement.querySelectorAll('pre code');
-        for (const block of codeBlocks) {
-            try {
-                const text = block.innerText.trim();
-                const parsed = JSON.parse(text);
-                if (parsed.schema_version && parsed.task && parsed.context) {
-                    return parsed;
-                }
-                if (parsed.task_id || (parsed.title && parsed.tasks)) {
-                    return parsed;
-                }
-            } catch (e) {}
+        const fields = {};
+        let key = null;
+        for (const line of match[1].split(/\r?\n/)) {
+            const entry = line.match(/^([A-Za-z][A-Za-z-]*):\s*(.*)$/);
+            if (entry) {
+                key = entry[1].toLowerCase();
+                if (Object.prototype.hasOwnProperty.call(fields, key)) return null;
+                fields[key] = entry[2].trim();
+            } else if (key && line.trim()) {
+                fields[key] += '\n' + line.trim();
+            } else if (line.trim()) {
+                return null;
+            }
         }
 
-        // Fallback: construct standard task handoff from message context
-        const messageText = messageElement.innerText.trim();
-        const sessionId = crypto.randomUUID();
-        const taskId = "task-" + Date.now();
+        const id = fields['task-id'];
+        const cwd = fields.workspace;
+        const task = fields.task;
+        const validation = fields.validation;
+        const branch = fields.branch;
+        if (!id || !/^[A-Za-z0-9_-]{3,64}$/.test(id) ||
+            !cwd || !(/^\//.test(cwd) || /^[A-Za-z]:[\\/]/.test(cwd)) ||
+            !task || task.length < 10 || !validation || validation.length < 10 ||
+            !branch || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch) ||
+            branch.includes('..') || branch === 'main' || branch === 'master') return null;
+
+        const repository = fields.repository || '';
+        const title = (fields.title || task.split('\n')[0]).slice(0, 200);
+        const instructions = [
+            task,
+            repository ? 'Repository: ' + repository : '',
+            'Work only on branch: ' + branch,
+            'Validation: ' + validation,
+            'Do not run GitHub Actions, force-push or modify the integration branch.',
+            'Report changed files, verification commands and their exit codes.'
+        ].filter(Boolean).join('\n\n');
 
         return {
-            schema_version: "1.0.0",
+            schema_version: '1.0.0',
             context: {
-                session_id: sessionId,
-                source: "browser_extension",
-                user_intent: "Implement decision from ChatGPT Web interaction",
-                decision_rationale: "Extracted directly from ChatGPT conversation message.",
-                timestamp: new Date().toISOString()
+                session_id: crypto.randomUUID(),
+                source: 'browser_extension',
+                timestamp: new Date().toISOString(),
+                user_intent: task.slice(0, 900),
+                decision_rationale: 'Explicit assistant QWEN_TASK handoff'
             },
             task: {
-                task_id: taskId,
-                title: "ChatGPT Web Task Handoff",
-                description: messageText.slice(0, 4000),
-                category: "feature",
-                priority: "medium",
-                complexity: "medium"
+                task_id: id,
+                title: title.length >= 3 ? title : 'Local coding task',
+                description: instructions,
+                category: 'bugfix',
+                priority: 'medium',
+                complexity: 'medium'
             },
             constraints: {
-                environment: {
-                    os: "any",
-                    runtime: "node/python",
-                    cwd: "."
-                },
+                environment: { os: 'linux', runtime: 'local', cwd: cwd },
                 security_policy: {
-                    execution_mode: "sandboxed",
-                    permitted_commands: ["^python3?\\b", "^pytest\\b", "^git\\b", "^npm\\b"],
-                    forbidden_commands: ["\\brm\\s+-rf\\s+[/~]"],
-                    allowed_file_paths: ["*"],
-                    forbidden_file_paths: [".git/*", ".env*"]
+                    execution_mode: 'sandboxed',
+                    permitted_commands: ['^git\\b', '^python3?\\b', '^make\\b', '^ninja\\b', '^cmake\\b'],
+                    forbidden_commands: ['\\brm\\s+-rf\\s+[/~]', '\\bmkfs\\b'],
+                    allowed_file_paths: ['*'],
+                    forbidden_file_paths: ['.git/*', '.env*'],
+                    network_access: 'local_only'
                 },
                 limits: {
-                    max_execution_timeout_seconds: 300,
+                    max_execution_timeout_seconds: 3600,
                     max_iterations: 30,
                     max_file_modifications: 25
                 }
@@ -147,100 +121,69 @@
             file_operations: [],
             verification: {
                 automated_checks: [],
-                acceptance_statement: "Task implementation matches ChatGPT conversation instructions."
+                acceptance_statement: validation
             }
         };
     }
 
-    function sendToDaemon(payload, buttonElement) {
-        if (!CONFIG.token) {
-            showConfigModal();
-            showToast('⚠️ Please configure your auth token first', 'error');
+    function markDone(id) {
+        recent.add(id);
+        const ids = Array.from(recent).slice(-500);
+        GM_setValue('qwen_dispatched_ids', ids);
+    }
+
+    function submit(payload) {
+        const id = payload.task.task_id;
+        if (recent.has(id) || inFlight.has(id) || failedThisSession.has(id)) return;
+        const token = config.token;
+        if (!token) {
+            failedThisSession.add(id);
+            console.warn('[Qwen bridge] Missing bearer token; configure in userscript menu');
             return;
         }
-
-        const originalText = buttonElement.innerText;
-        buttonElement.innerText = '⏳ Dispatching...';
-        buttonElement.disabled = true;
-
+        inFlight.add(id);
         GM_xmlhttpRequest({
             method: 'POST',
-            url: `${CONFIG.url.rstrip ? CONFIG.url.rstrip('/') : CONFIG.url}/api/tasks`,
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${CONFIG.token}`
-            },
+            url: config.url.replace(/\/$/, '') + '/api/tasks',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
             data: JSON.stringify(payload),
             timeout: 15000,
-            onload: (res) => {
-                buttonElement.disabled = false;
-                if (res.status === 201 || res.status === 202) {
-                    try {
-                        const data = JSON.parse(res.responseText);
-                        buttonElement.innerText = `✅ Queued (${data.task_id.slice(0, 8)})`;
-                        buttonElement.style.background = '#10b981';
-                        showToast(`🚀 Task ${data.task_id} sent to local agent!`, 'success');
-                    } catch (e) {
-                        buttonElement.innerText = '✅ Sent';
-                    }
+            onload: response => {
+                inFlight.delete(id);
+                if (response.status === 201 || response.status === 202 || response.status === 409) {
+                    markDone(id);
+                    console.info('[Qwen bridge] Task recorded:', id, 'HTTP', response.status);
                 } else {
-                    buttonElement.innerText = `❌ Error (${res.status})`;
-                    buttonElement.style.background = '#ef4444';
-                    showToast(`Error ${res.status}: ${res.responseText.slice(0, 100)}`, 'error');
-                    setTimeout(() => { buttonElement.innerText = originalText; buttonElement.style.background = ''; }, 3000);
+                    failedThisSession.add(id);
+                    console.error('[Qwen bridge] Task rejected:', id, response.status, response.responseText);
                 }
             },
-            onerror: (err) => {
-                buttonElement.disabled = false;
-                buttonElement.innerText = '❌ Daemon Unreachable';
-                buttonElement.style.background = '#ef4444';
-                showToast(`Daemon unreachable at ${CONFIG.url}. Is bridge running?`, 'error');
-                setTimeout(() => { buttonElement.innerText = originalText; buttonElement.style.background = ''; }, 3000);
-            },
-            ontimeout: () => {
-                buttonElement.disabled = false;
-                buttonElement.innerText = '❌ Timeout';
-                showToast('Request to local daemon timed out', 'error');
-            }
+            onerror: () => { inFlight.delete(id); failedThisSession.add(id); console.error('[Qwen bridge] Connection failed:', id); },
+            ontimeout: () => { inFlight.delete(id); failedThisSession.add(id); console.error('[Qwen bridge] Request timed out:', id); }
         });
     }
 
-    function injectButtons() {
-        const turns = document.querySelectorAll('article[data-testid^="conversation-turn-"]');
-        turns.forEach(turn => {
-            // Check if assistant turn
-            const isAssistant = turn.querySelector('[data-message-author-role="assistant"]') || turn.querySelector('.agent-turn') || turn.innerText.includes('ChatGPT');
-            if (!isAssistant) return;
-
-            if (turn.querySelector('.chatgpt-local-bridge-btn')) return;
-
-            const actionsBar = turn.querySelector('div[class*="items-center"]') || turn.querySelector('div[class*="justify-between"]');
-            if (!actionsBar) return;
-
-            const btn = document.createElement('button');
-            btn.className = 'chatgpt-local-bridge-btn';
-            btn.style.cssText = `
-                display: inline-flex; align-items: center; gap: 4px;
-                padding: 4px 10px; margin-left: 8px; font-size: 12px; font-weight: 600;
-                background: #059669; color: #ffffff; border: none; border-radius: 6px;
-                cursor: pointer; transition: background 0.2s; font-family: sans-serif;
-            `;
-            btn.innerText = '⚡ Send to Local Agent';
-            btn.onmouseover = () => { if (!btn.disabled) btn.style.background = '#047857'; };
-            btn.onmouseout = () => { if (!btn.disabled) btn.style.background = '#059669'; };
-
-            btn.onclick = (e) => {
-                e.preventDefault();
-                const payload = extractTaskPayload(turn);
-                sendToDaemon(payload, btn);
-            };
-
-            actionsBar.appendChild(btn);
+    function scan() {
+        // Never dispatch while the assistant is still generating.
+        if (document.querySelector('[data-testid="stop-button"], button[aria-label="Stop generating"]')) return;
+        document.querySelectorAll('[data-message-author-role="assistant"]').forEach(message => {
+            if (pending.has(message)) return;
+            const snapshot = message.innerText.trim();
+            const task = parseMarkedTask(snapshot);
+            if (!task || recent.has(task.task.task_id) || failedThisSession.has(task.task.task_id)) return;
+            pending.add(message);
+            // Debounce completed output. The closing marker is mandatory.
+            setTimeout(() => {
+                pending.delete(message);
+                if (!message.isConnected ||
+                    document.querySelector('[data-testid="stop-button"], button[aria-label="Stop generating"]') ||
+                    message.innerText.trim() !== snapshot) return;
+                submit(task);
+            }, 1800);
         });
     }
 
-    // Observe DOM mutations for new turns
-    const observer = new MutationObserver(() => injectButtons());
-    observer.observe(document.body, { childList: true, subtree: true });
-    injectButtons();
+    // Polling avoids a mutation loop triggered by the userscript itself.
+    setInterval(scan, 1500);
+    scan();
 })();
