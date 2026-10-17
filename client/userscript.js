@@ -20,6 +20,8 @@
     const failedThisSession = new Set();
     const recent = new Set(GM_getValue('qwen_dispatched_ids', []));
     const pending = new WeakSet();
+    const startupMessages = new WeakSet();
+    const readyAt = Date.now() + 4000; // Ignore chat history loaded during startup.
 
     const config = {
         get url() { return GM_getValue('bridge_daemon_url', DAEMON_URL); },
@@ -136,6 +138,11 @@
         const id = payload.task.task_id;
         if (recent.has(id) || inFlight.has(id) || failedThisSession.has(id)) return;
         const token = config.token;
+        if (!/^http:\/\/(127\.0\.0\.1|localhost):\d+\/?$/.test(config.url)) {
+            failedThisSession.add(id);
+            console.error('[Qwen bridge] Refusing non-loopback URL');
+            return;
+        }
         if (!token) {
             failedThisSession.add(id);
             console.warn('[Qwen bridge] Missing bearer token; configure in userscript menu');
@@ -164,10 +171,17 @@
     }
 
     function scan() {
+        // Never execute a marked task from old conversation history on page load.
+        if (Date.now() < readyAt) {
+            document.querySelectorAll('[data-message-author-role="assistant"]').forEach(
+                message => startupMessages.add(message)
+            );
+            return;
+        }
         // Never dispatch while the assistant is still generating.
         if (document.querySelector('[data-testid="stop-button"], button[aria-label="Stop generating"]')) return;
         document.querySelectorAll('[data-message-author-role="assistant"]').forEach(message => {
-            if (pending.has(message)) return;
+            if (startupMessages.has(message) || pending.has(message)) return;
             const snapshot = message.innerText.trim();
             const task = parseMarkedTask(snapshot);
             if (!task || recent.has(task.task.task_id) || failedThisSession.has(task.task.task_id)) return;
