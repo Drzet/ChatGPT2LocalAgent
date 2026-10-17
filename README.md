@@ -1,5 +1,7 @@
 # ChatGPT Web to Local Agent Research & Bridge System
 
+> **Sol High → local Qwen on Lynx:** See [the integration and setup guide](docs/LYNX_SOL_QWEN.md). The new OpenCode executor is on the `feature/sol-qwen-bridge` branch; ordinary ChatGPT messages are ignored unless wrapped in explicit QWEN_TASK markers. Local hardware validation remains outstanding.
+
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-zero%20(stdlib%20only)-brightgreen.svg)]()
