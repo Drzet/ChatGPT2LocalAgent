@@ -36,6 +36,7 @@ from bridge.executors import (
     BaseAgentExecutor,
     MockAgentExecutor,
     PIAgentExecutor,
+    OpenCodeExecutor,
     TaskRunnerPool,
 )
 from bridge.inbox_watcher import InboxWatcher, extract_json_from_markdown
@@ -476,6 +477,8 @@ class BridgeDaemon:
         allowed_roots: Optional[List[Union[str, Path]]] = None,
         executor_type: str = "mock",
         pi_binary_path: Optional[str] = None,
+        opencode_binary_path: Optional[str] = None,
+        opencode_model: Optional[str] = None,
         db_path: Union[str, Path] = ":memory:",
         inbox_dir: Optional[Union[str, Path]] = None,
         enable_clipboard: bool = False,
@@ -508,6 +511,14 @@ class BridgeDaemon:
                 pi_binary_path=pi_binary_path,
                 allowed_roots=self.allowed_roots,
             )
+        elif executor_type == "opencode":
+            self.executor = OpenCodeExecutor(
+                opencode_binary_path=opencode_binary_path,
+                model=opencode_model,
+                allowed_roots=self.allowed_roots,
+            )
+            if not self.executor.model:
+                raise ValueError("Configure --opencode-model or OPENCODE_MODEL before starting OpenCode mode")
         else:
             self.executor = MockAgentExecutor(allowed_roots=self.allowed_roots)
 
@@ -576,8 +587,10 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765, help="Port to bind (default: 8765)")
     parser.add_argument("--token", default=None, help="Secret Bearer authentication token")
     parser.add_argument("--workspace", action="append", help="Authorized workspace root (can specify multiple)")
-    parser.add_argument("--executor", choices=["mock", "pi"], default="mock", help="Agent executor type (default: mock)")
+    parser.add_argument("--executor", choices=["mock", "pi", "opencode"], default="mock", help="Agent executor type (default: mock)")
     parser.add_argument("--pi-binary", default=None, help="Path to PI CLI executable")
+    parser.add_argument("--opencode-binary", default=None, help="Path to OpenCode CLI executable")
+    parser.add_argument("--opencode-model", default=None, help="Explicit local provider/model for OpenCode")
     parser.add_argument("--db", default="tasks.db", help="SQLite database path (default: tasks.db)")
     parser.add_argument("--inbox", default="inbox", help="Inbox directory to monitor (default: inbox)")
     parser.add_argument("--no-inbox", action="store_true", help="Disable inbox file watcher")
@@ -598,6 +611,8 @@ def main() -> None:
         allowed_roots=args.workspace or [os.getcwd()],
         executor_type=args.executor,
         pi_binary_path=args.pi_binary,
+        opencode_binary_path=args.opencode_binary,
+        opencode_model=args.opencode_model,
         db_path=args.db,
         inbox_dir=None if args.no_inbox else args.inbox,
         enable_clipboard=args.clipboard,
