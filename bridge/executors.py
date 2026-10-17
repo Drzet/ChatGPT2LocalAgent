@@ -480,6 +480,10 @@ class PIAgentExecutor(BaseAgentExecutor):
 
         return "\n".join(prompt_lines)
 
+    def _build_argv(self, binary: str, prompt: str) -> List[str]:
+        """Build PI's noninteractive command without shell interpolation."""
+        return [binary, "-p", prompt, "--tools", "read,edit,write,bash,grep,find,ls", "--approve"]
+
     def execute(
         self,
         task_payload: Dict[str, Any],
@@ -554,14 +558,7 @@ class PIAgentExecutor(BaseAgentExecutor):
             state_store.record_event(task_id, TaskState.RUNNING, "Starting PI agent execution")
 
             prompt = self._format_pi_prompt(task_payload)
-            argv = [
-                pi_path,
-                "-p",
-                prompt,
-                "--tools",
-                "read,edit,write,bash,grep,find,ls",
-                "--approve",
-            ]
+            argv = self._build_argv(pi_path, prompt)
 
             def on_stdout(line: str):
                 clean = line.strip()
@@ -661,6 +658,34 @@ class PIAgentExecutor(BaseAgentExecutor):
             return state_store.record_event(task_id, TaskState.FAILED, "Internal error")
         finally:
             self._running_tasks[task_id] = False
+
+
+class OpenCodeExecutor(PIAgentExecutor):
+    """Run OpenCode non-interactively against an explicitly configured model.
+
+    The model MUST be specified; silently falling back to a cloud model could
+    incur costs and violate the intended local-only workflow.
+    """
+
+    def __init__(
+        self,
+        opencode_binary_path: Optional[str] = None,
+        model: Optional[str] = None,
+        allowed_roots: Optional[List[Union[str, Path]]] = None,
+    ):
+        super().__init__(
+            pi_binary_path=opencode_binary_path or os.environ.get("OPENCODE_BINARY", "opencode"),
+            allowed_roots=allowed_roots,
+        )
+        self.model = model or os.environ.get("OPENCODE_MODEL")
+
+    def _build_argv(self, binary: str, prompt: str) -> List[str]:
+        if not self.model:
+            raise ValueError(
+                "OpenCode model not configured; use --opencode-model or OPENCODE_MODEL "
+                "with an explicit local provider/model identifier"
+            )
+        return [binary, "run", "--model", self.model, prompt]
 
 
 class TaskRunnerPool:
