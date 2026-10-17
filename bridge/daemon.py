@@ -255,6 +255,16 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._send_error(400, "ERR_SCHEMA_VALIDATION", "Task handoff schema validation failed", details=errors)
                 return
 
+            # Stable task IDs prevent duplicate execution on page reload/retry.
+            task_id = payload["task"]["task_id"]
+            if self.server.state_store.get_task(task_id) is not None:
+                self._send_json(409, {
+                    "task_id": task_id,
+                    "status": "duplicate",
+                    "message": "Task ID already exists; not re-executed",
+                })
+                return
+
             # Validate workspace jail
             env_conf = payload.get("constraints", {}).get("environment", {})
             ws_root_str = env_conf.get("cwd", ".")
